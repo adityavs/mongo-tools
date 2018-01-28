@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package log
 
 import (
@@ -19,8 +25,9 @@ func TestBasicToolLoggerFunctionality(t *testing.T) {
 
 	Convey("With a new ToolLogger", t, func() {
 		v1 := &options.Verbosity{
-			Quiet:   false,
-			Verbose: []bool{true, true, true},
+			Quiet:        false,
+			SetVerbosity: nil,
+			VLevel:       3,
 		}
 		tl = NewToolLogger(v1)
 		So(tl, ShouldNotBeNil)
@@ -28,7 +35,7 @@ func TestBasicToolLoggerFunctionality(t *testing.T) {
 		So(tl.verbosity, ShouldEqual, 3)
 
 		Convey("writing a negative verbosity should panic", func() {
-			So(func() { tl.Logf(-1, "nope") }, ShouldPanic)
+			So(func() { tl.Logvf(-1, "nope") }, ShouldPanic)
 		})
 
 		Convey("writing the output to a buffer", func() {
@@ -36,9 +43,9 @@ func TestBasicToolLoggerFunctionality(t *testing.T) {
 			tl.SetWriter(buf)
 
 			Convey("with Logfs of various verbosity levels", func() {
-				tl.Logf(0, "test this string")
-				tl.Logf(5, "this log level is too high and will not log")
-				tl.Logf(1, "====!%v!====", 12.5)
+				tl.Logvf(0, "test this string")
+				tl.Logvf(5, "this log level is too high and will not log")
+				tl.Logvf(1, "====!%v!====", 12.5)
 
 				Convey("only messages of low enough verbosity should be written", func() {
 					l1, _ := buf.ReadString('\n')
@@ -67,14 +74,15 @@ func TestGlobalToolLoggerFunctionality(t *testing.T) {
 
 	Convey("With an initialized global ToolLogger", t, func() {
 		globalToolLogger = NewToolLogger(&options.Verbosity{
-			Quiet:   false,
-			Verbose: []bool{true, true, true},
+			Quiet:        false,
+			SetVerbosity: nil,
+			VLevel:       3,
 		})
 		So(globalToolLogger, ShouldNotBeNil)
 
 		Convey("actions shouldn't panic", func() {
 			So(func() { SetVerbosity(&options.Verbosity{Quiet: true}) }, ShouldNotPanic)
-			So(func() { Logf(0, "woooo") }, ShouldNotPanic)
+			So(func() { Logvf(0, "woooo") }, ShouldNotPanic)
 			So(func() { SetDateFormat("ahaha") }, ShouldNotPanic)
 			So(func() { SetWriter(os.Stdout) }, ShouldNotPanic)
 		})
@@ -85,8 +93,9 @@ func TestToolLoggerWriter(t *testing.T) {
 	Convey("With a tool logger that writes to a buffer", t, func() {
 		buff := bytes.NewBuffer(make([]byte, 1024))
 		v1 := &options.Verbosity{
-			Quiet:   false,
-			Verbose: []bool{true, true, true},
+			Quiet:        false,
+			SetVerbosity: nil,
+			VLevel:       3,
 		}
 		tl := NewToolLogger(v1)
 		tl.SetWriter(buff)

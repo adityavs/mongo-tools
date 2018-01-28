@@ -1,8 +1,12 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package archive
 
-import (
-	"io"
-)
+import "io"
 
 // NamespaceHeader is a data structure that, as BSON, is found in archives where it indicates
 // that either the subsequent stream of BSON belongs to this new namespace, or that the
@@ -10,8 +14,8 @@ import (
 type NamespaceHeader struct {
 	Database   string `bson:"db"`
 	Collection string `bson:"collection"`
-	EOF        bool   `bson:"EOF",omitempty`
-	CRC        int64  `bson:"CRC",omitempty`
+	EOF        bool   `bson:"EOF"`
+	CRC        int64  `bson:"CRC"`
 }
 
 // CollectionMetadata is a data structure that, as BSON, is found in the prelude of the archive.
@@ -26,8 +30,10 @@ type CollectionMetadata struct {
 // Header is a data structure that, as BSON, is found immediately after the magic
 // number in the archive, before any CollectionMetadatas. It is the home of any archive level information
 type Header struct {
-	ConcurrentCollections int32  `BSON:"concurrent_collections",omitempty`
-	FormatVersion         string `BSON:"version"`
+	ConcurrentCollections int32  `bson:"concurrent_collections"`
+	FormatVersion         string `bson:"version"`
+	ServerVersion         string `bson:"server_version"`
+	ToolVersion           string `bson:"tool_version"`
 }
 
 const minBSONSize = 4 + 1 // an empty BSON document should be exactly five bytes long

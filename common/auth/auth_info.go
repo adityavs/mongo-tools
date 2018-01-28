@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 // Package auth provides utilities for performing tasks related to authentication.
 package auth
 
@@ -43,4 +49,23 @@ func GetAuthVersion(commander db.CommandRunner) (int, error) {
 			results["authSchemaVersion"])
 	}
 	return version, nil
+}
+
+// VerifySystemAuthVersion returns an error if authentication is not set up for
+// the given server.
+func VerifySystemAuthVersion(sessionProvider *db.SessionProvider) error {
+	session, err := sessionProvider.GetSession()
+	if err != nil {
+		return fmt.Errorf("error getting session from server: %v", err)
+	}
+	defer session.Close()
+
+	authSchemaQuery := bson.M{"_id": "authSchema"}
+	versionEntries := session.DB("admin").C("system.version").Find(authSchemaQuery)
+	if count, err := versionEntries.Count(); err != nil {
+		return fmt.Errorf("error checking pressence of auth version: %v", err)
+	} else if count == 0 {
+		return fmt.Errorf("found no auth version")
+	}
+	return nil
 }

@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package mongoexport
 
 import (
@@ -70,7 +76,7 @@ func (jsonExporter *JSONExportOutput) Flush() error {
 
 // ExportDocument converts the given document to extended JSON, and writes it
 // to the output.
-func (jsonExporter *JSONExportOutput) ExportDocument(document bson.M) error {
+func (jsonExporter *JSONExportOutput) ExportDocument(document bson.D) error {
 	if jsonExporter.ArrayOutput || jsonExporter.PrettyOutput {
 		if jsonExporter.NumExported >= 1 {
 			if jsonExporter.ArrayOutput {

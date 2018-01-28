@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package mongoexport
 
 import (
@@ -22,7 +28,7 @@ func TestWriteJSON(t *testing.T) {
 				objId := bson.NewObjectId()
 				err := jsonExporter.WriteHeader()
 				So(err, ShouldBeNil)
-				err = jsonExporter.ExportDocument(bson.M{"_id": objId})
+				err = jsonExporter.ExportDocument(bson.D{{"_id", objId}})
 				So(err, ShouldBeNil)
 				err = jsonExporter.WriteFooter()
 				So(err, ShouldBeNil)
@@ -49,9 +55,9 @@ func TestJSONArray(t *testing.T) {
 
 			// Export a few docs of various types
 
-			testObjs := []interface{}{bson.NewObjectId(), "asd", 12345, 3.14159, bson.M{"A": 1}}
+			testObjs := []interface{}{bson.NewObjectId(), "asd", 12345, 3.14159, bson.D{{"A", 1}}}
 			for _, obj := range testObjs {
-				err = jsonExporter.ExportDocument(bson.M{"_id": obj})
+				err = jsonExporter.ExportDocument(bson.D{{"_id", obj}})
 				So(err, ShouldBeNil)
 			}
 

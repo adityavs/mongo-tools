@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 // +build sasl
 
 package db
@@ -6,14 +12,14 @@ package db
 
 import (
 	"fmt"
-	"github.com/mongodb/mongo-tools/common/db/kerberos"
+	"os"
+	"runtime"
+	"testing"
+
 	"github.com/mongodb/mongo-tools/common/options"
 	"github.com/mongodb/mongo-tools/common/testutil"
 	. "github.com/smartystreets/goconvey/convey"
 	"gopkg.in/mgo.v2/bson"
-	"os"
-	"runtime"
-	"testing"
 )
 
 var (
@@ -21,9 +27,9 @@ var (
 	KERBEROS_USER = "drivers@LDAPTEST.10GEN.CC"
 )
 
-func TestKerberosDBConnector(t *testing.T) {
+func TestKerberosAuthMechanism(t *testing.T) {
 	Convey("should be able to successfully connect", t, func() {
-		connector := &kerberos.KerberosDBConnector{}
+		connector := &VanillaDBConnector{}
 
 		opts := options.ToolOptions{
 			Connection: &options.Connection{
@@ -31,7 +37,8 @@ func TestKerberosDBConnector(t *testing.T) {
 				Port: "27017",
 			},
 			Auth: &options.Auth{
-				Username: KERBEROS_USER,
+				Username:  KERBEROS_USER,
+				Mechanism: "GSSAPI",
 			},
 			Kerberos: &options.Kerberos{
 				Service:     "mongodb",

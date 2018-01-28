@@ -1,13 +1,19 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 // Package progress exposes utilities to asynchronously monitor and display processing progress.
 package progress
 
 import (
 	"bytes"
 	"fmt"
-	"github.com/mongodb/mongo-tools/common/text"
 	"io"
-	"sync"
 	"time"
+
+	"github.com/mongodb/mongo-tools/common/text"
 )
 
 const (
@@ -17,52 +23,6 @@ const (
 	BarLeft         = "["
 	BarRight        = "]"
 )
-
-// countProgressor is an implementation of Progressor that uses
-type countProgressor struct {
-	max     int64
-	current int64
-	*sync.Mutex
-}
-
-func (c *countProgressor) Progress() (int64, int64) {
-	c.Lock()
-	defer c.Unlock()
-	return c.max, c.current
-}
-func (c *countProgressor) Inc(amount int64) {
-	c.Lock()
-	defer c.Unlock()
-	c.current += amount
-}
-
-func (c *countProgressor) Set(amount int64) {
-	c.Lock()
-	defer c.Unlock()
-	c.current = amount
-}
-
-func NewCounter(max int64) *countProgressor {
-	return &countProgressor{max, 0, &sync.Mutex{}}
-}
-
-// Progressor can be implemented to allow an object to hook up to a progress.Bar.
-type Progressor interface {
-	// Progress returns a pair of integers: the total amount to reach 100%, and
-	// the amount completed. This method is called by progress.Bar to
-	// determine what percentage to display.
-	Progress() (int64, int64)
-}
-
-// Updateable is an interface which exposes the ability for a progressing value to be
-// incremented, or reset.
-type Updateable interface {
-	// Inc increments the current progress counter by the given amount.
-	Inc(amount int64)
-
-	// Set resets the progress counter to the given amount.
-	Set(amount int64)
-}
 
 // Bar is a tool for concurrently monitoring the progress
 // of a task with a simple linear ASCII visualization
@@ -85,7 +45,12 @@ type Bar struct {
 	// WaitTime is the time to wait between writing the bar
 	WaitTime time.Duration
 
-	stopChan chan struct{}
+	stopChan     chan struct{}
+	stopChanSync chan struct{}
+
+	// hasRendered indicates that the bar has been rendered at least once
+	// and implies that when detaching should be rendered one more time
+	hasRendered bool
 }
 
 // Start starts the Bar goroutine. Once Start is called, a bar will
@@ -99,6 +64,7 @@ func (pb *Bar) Start() {
 		panic("Cannot use a Bar with an unset Writer")
 	}
 	pb.stopChan = make(chan struct{})
+	pb.stopChanSync = make(chan struct{})
 
 	go pb.start()
 }
@@ -119,12 +85,15 @@ func (pb *Bar) validate() {
 //  myBar.Start()
 //  defer myBar.Stop()
 // to stop leakage
+// Stop() needs to be synchronous in order that when pb.Stop() is called
+// all of the rendering has completed
 func (pb *Bar) Stop() {
 	close(pb.stopChan)
+	<-pb.stopChanSync
 }
 
 func (pb *Bar) formatCounts() (string, string) {
-	maxCount, currentCount := pb.Watching.Progress()
+	currentCount, maxCount := pb.Watching.Progress()
 	if pb.IsBytes {
 		return text.FormatByteAmount(maxCount), text.FormatByteAmount(currentCount)
 	}
@@ -133,7 +102,8 @@ func (pb *Bar) formatCounts() (string, string) {
 
 // computes all necessary values renders to the bar's Writer
 func (pb *Bar) renderToWriter() {
-	maxCount, currentCount := pb.Watching.Progress()
+	pb.hasRendered = true
+	currentCount, maxCount := pb.Watching.Progress()
 	maxStr, currentStr := pb.formatCounts()
 	if maxCount == 0 {
 		// if we have no max amount, just print a count
@@ -152,7 +122,8 @@ func (pb *Bar) renderToWriter() {
 }
 
 func (pb *Bar) renderToGridRow(grid *text.GridWriter) {
-	maxCount, currentCount := pb.Watching.Progress()
+	pb.hasRendered = true
+	currentCount, maxCount := pb.Watching.Progress()
 	maxStr, currentStr := pb.formatCounts()
 	if maxCount == 0 {
 		// if we have no max amount, just print a count
@@ -180,6 +151,11 @@ func (pb *Bar) start() {
 	for {
 		select {
 		case <-pb.stopChan:
+			if pb.hasRendered {
+				// if we've rendered this bar at least once, render it one last time
+				pb.renderToWriter()
+			}
+			close(pb.stopChanSync)
 			return
 		case <-ticker.C:
 			pb.renderToWriter()

@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package json
 
 import (
@@ -8,13 +14,13 @@ import (
 // Transition functions for recognizing BinData.
 // Adapted from encoding/json/scanner.go.
 
-// stateB is the state after reading `B`.
-func stateB(s *scanner, c int) int {
-	if c == 'i' {
-		s.step = generateState("BinData", []byte("nData"), stateConstructor)
+// stateBi is the state after reading `Bi`.
+func stateBi(s *scanner, c int) int {
+	if c == 'n' {
+		s.step = generateState("BinData", []byte("Data"), stateConstructor)
 		return scanContinue
 	}
-	return s.error(c, "in literal BinData (expecting 'i')")
+	return s.error(c, "in literal BinData (expecting 'n')")
 }
 
 // Decodes a BinData literal stored in the underlying byte data into v.

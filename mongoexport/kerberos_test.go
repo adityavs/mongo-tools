@@ -1,8 +1,15 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package mongoexport
 
 import (
 	"bytes"
 	"github.com/mongodb/mongo-tools/common/db"
+	"github.com/mongodb/mongo-tools/common/json"
 	"github.com/mongodb/mongo-tools/common/testutil"
 	. "github.com/smartystreets/goconvey/convey"
 	"strings"
@@ -34,8 +41,10 @@ func TestKerberos(t *testing.T) {
 		So(num, ShouldEqual, 1)
 		outputLines := strings.Split(strings.TrimSpace(out.String()), "\n")
 		So(len(outputLines), ShouldEqual, 1)
-		So(outputLines[0], ShouldEqual,
-			"{\"_id\":{\"$oid\":\"528fb35afb3a8030e2f643c3\"},"+
-				"\"authenticated\":\"yeah\",\"kerberos\":true}")
+		outMap := map[string]interface{}{}
+		So(json.Unmarshal([]byte(outputLines[0]), &outMap), ShouldBeNil)
+		So(outMap["kerberos"], ShouldEqual, true)
+		So(outMap["authenticated"], ShouldEqual, "yeah")
+		So(outMap["_id"].(map[string]interface{})["$oid"], ShouldEqual, "528fb35afb3a8030e2f643c3")
 	})
 }

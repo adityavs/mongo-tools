@@ -1,17 +1,26 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package mongorestore
 
 import (
 	"compress/gzip"
 	"fmt"
-	"github.com/mongodb/mongo-tools/common/archive"
-	"github.com/mongodb/mongo-tools/common/intents"
-	"github.com/mongodb/mongo-tools/common/log"
-	"github.com/mongodb/mongo-tools/common/util"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+
+	"github.com/mongodb/mongo-tools/common"
+	"github.com/mongodb/mongo-tools/common/archive"
+	"github.com/mongodb/mongo-tools/common/intents"
+	"github.com/mongodb/mongo-tools/common/log"
+	"github.com/mongodb/mongo-tools/common/util"
 )
 
 // FileType describes the various types of restore documents.
@@ -30,12 +39,61 @@ func (errorWriter) Write([]byte) (int, error) {
 	return 0, os.ErrInvalid
 }
 
+// PosReader is a ReadCloser which maintains the position of what has been
+// read from the Reader.
+type PosReader interface {
+	io.ReadCloser
+	Pos() int64
+}
+
+// posTrackingReader is a type for reading from a file and being able to determine
+// what position the file is at.
+type posTrackingReader struct {
+	pos int64 // updated atomically, aligned at the beginning of the struct
+	io.ReadCloser
+}
+
+func (f *posTrackingReader) Read(p []byte) (int, error) {
+	n, err := f.ReadCloser.Read(p)
+	atomic.AddInt64(&f.pos, int64(n))
+	return n, err
+}
+
+func (f *posTrackingReader) Pos() int64 {
+	return atomic.LoadInt64(&f.pos)
+}
+
+// mixedPosTrackingReader is a type for reading from one file but getting the position of a
+// different file. This is useful for compressed files where the appropriate position for progress
+// bars is that of the compressed file, but file should be read from the uncompressed file.
+type mixedPosTrackingReader struct {
+	readHolder PosReader
+	posHolder  PosReader
+}
+
+func (f *mixedPosTrackingReader) Read(p []byte) (int, error) {
+	return f.readHolder.Read(p)
+}
+
+func (f *mixedPosTrackingReader) Pos() int64 {
+	return f.posHolder.Pos()
+}
+
+func (f *mixedPosTrackingReader) Close() error {
+	err := f.readHolder.Close()
+	if err != nil {
+		return err
+	}
+	return f.posHolder.Close()
+}
+
 // realBSONFile implements the intents.file interface. It lets intents read from real BSON files
 // ok disk via an embedded os.File
 // The Read, Write and Close methods of the intents.file interface is implemented here by the
 // embedded os.File, the Write will return an error and not succeed
 type realBSONFile struct {
-	io.ReadCloser
+	path string
+	PosReader
 	// errorWrite adds a Write() method to this object allowing it to be an
 	// intent.file ( a ReadWriteOpenCloser )
 	errorWriter
@@ -46,22 +104,26 @@ type realBSONFile struct {
 // Open is part of the intents.file interface. realBSONFiles need to be Opened before Read
 // can be called on them.
 func (f *realBSONFile) Open() (err error) {
-	if f.intent.BSONPath == "" {
+	if f.path == "" {
 		// this error shouldn't happen normally
 		return fmt.Errorf("error reading BSON file for %v", f.intent.Namespace())
 	}
-	file, err := os.Open(f.intent.BSONPath)
+	file, err := os.Open(f.path)
 	if err != nil {
-		return fmt.Errorf("error reading BSON file %v: %v", f.intent.BSONPath, err)
+		return fmt.Errorf("error reading BSON file %v: %v", f.path, err)
 	}
+	posFile := &posTrackingReader{0, file}
 	if f.gzip {
-		gzFile, err := gzip.NewReader(file)
+		gzFile, err := gzip.NewReader(posFile)
+		posUncompressedFile := &posTrackingReader{0, gzFile}
 		if err != nil {
-			return fmt.Errorf("error decompressing compresed BSON file %v: %v", f.intent.BSONPath, err)
+			return fmt.Errorf("error decompressing compresed BSON file %v: %v", f.path, err)
 		}
-		f.ReadCloser = &wrappedReadCloser{gzFile, file}
+		f.PosReader = &mixedPosTrackingReader{
+			readHolder: posUncompressedFile,
+			posHolder:  posFile}
 	} else {
-		f.ReadCloser = file
+		f.PosReader = posFile
 	}
 	return nil
 }
@@ -71,7 +133,9 @@ func (f *realBSONFile) Open() (err error) {
 // The Read, Write and Close methods of the intents.file interface is implemented here by the
 // embedded os.File, the Write will return an error and not succeed
 type realMetadataFile struct {
+	pos int64 // updated atomically, aligned at the beginning of the struct
 	io.ReadCloser
+	path string
 	// errorWrite adds a Write() method to this object allowing it to be an
 	// intent.file ( a ReadWriteOpenCloser )
 	errorWriter
@@ -82,49 +146,63 @@ type realMetadataFile struct {
 // Open is part of the intents.file interface. realMetadataFiles need to be Opened before Read
 // can be called on them.
 func (f *realMetadataFile) Open() (err error) {
-	if f.intent.MetadataPath == "" {
-		return fmt.Errorf("error reading Metadata file for %v", f.intent.Namespace())
+	if f.path == "" {
+		return fmt.Errorf("error reading metadata for %v", f.intent.Namespace())
 	}
-	file, err := os.Open(f.intent.MetadataPath)
+	file, err := os.Open(f.path)
 	if err != nil {
-		return fmt.Errorf("error reading Metadata file %v: %v", f.intent.MetadataPath, err)
+		return fmt.Errorf("error reading metadata %v: %v", f.path, err)
 	}
 	if f.gzip {
 		gzFile, err := gzip.NewReader(file)
 		if err != nil {
-			return fmt.Errorf("error reading compresed Metadata file %v: %v", f.intent.MetadataPath, err)
+			return fmt.Errorf("error reading compressed metadata %v: %v", f.path, err)
 		}
-		f.ReadCloser = &wrappedReadCloser{gzFile, file}
+		f.ReadCloser = &util.WrappedReadCloser{gzFile, file}
 	} else {
 		f.ReadCloser = file
 	}
 	return nil
 }
 
+func (f *realMetadataFile) Read(p []byte) (int, error) {
+	n, err := f.ReadCloser.Read(p)
+	atomic.AddInt64(&f.pos, int64(n))
+	return n, err
+}
+
+func (f *realMetadataFile) Pos() int64 {
+	return atomic.LoadInt64(&f.pos)
+}
+
 // stdinFile implements the intents.file interface. They allow intents to read single collections
 // from standard input
 type stdinFile struct {
+	pos int64 // updated atomically, aligned at the beginning of the struct
 	io.Reader
-	intent *intents.Intent
+	errorWriter
 }
 
 // Open is part of the intents.file interface. stdinFile needs to have Open called on it before
 // Read can be called on it.
 func (f *stdinFile) Open() error {
-	f.Reader = os.Stdin
 	return nil
+}
+
+func (f *stdinFile) Read(p []byte) (int, error) {
+	n, err := f.Reader.Read(p)
+	atomic.AddInt64(&f.pos, int64(n))
+	return n, err
+}
+
+func (f *stdinFile) Pos() int64 {
+	return atomic.LoadInt64(&f.pos)
 }
 
 // Close is part of the intents.file interface. After Close is called, Read will fail.
 func (f *stdinFile) Close() error {
 	f.Reader = nil
 	return nil
-}
-
-// Write is part of the intents.file interface. Nobody should be writing to stdinFiles,
-// could probably justifiably panic here.
-func (f *stdinFile) Write(p []byte) (n int, err error) {
-	return 0, fmt.Errorf("can't write to standard output")
 }
 
 // getInfoFromFilename pulls the base collection name and FileType from a given file.
@@ -160,9 +238,8 @@ func (restore *MongoRestore) getInfoFromFilename(filename string) (string, FileT
 
 // CreateAllIntents drills down into a dump folder, creating intents for all of
 // the databases and collections it finds.
-func (restore *MongoRestore) CreateAllIntents(dir archive.DirLike, filterDB string, filterCollection string) error {
-	log.Logf(log.DebugHigh, "using %v as dump root directory", dir.Path())
-	foundOplog := false
+func (restore *MongoRestore) CreateAllIntents(dir archive.DirLike) error {
+	log.Logvf(log.DebugHigh, "using %v as dump root directory", dir.Path())
 	entries, err := dir.ReadDir()
 	if err != nil {
 		return fmt.Errorf("error reading root dump folder: %v", err)
@@ -172,31 +249,22 @@ func (restore *MongoRestore) CreateAllIntents(dir archive.DirLike, filterDB stri
 			if err = util.ValidateDBName(entry.Name()); err != nil {
 				return fmt.Errorf("invalid database name '%v': %v", entry.Name(), err)
 			}
-			if filterDB == "" || entry.Name() == filterDB {
-				err = restore.CreateIntentsForDB(entry.Name(), filterCollection, entry, false)
-			} else {
-				err = restore.CreateIntentsForDB(entry.Name(), "", entry, true)
-			}
+			err = restore.CreateIntentsForDB(entry.Name(), entry)
 			if err != nil {
 				return err
 			}
 		} else {
 			if entry.Name() == "oplog.bson" {
 				if restore.InputOptions.OplogReplay {
-					log.Log(log.DebugLow, "found oplog.bson file to replay")
+					log.Logv(log.DebugLow, "found oplog.bson file to replay")
 				}
-				foundOplog = true
 				oplogIntent := &intents.Intent{
 					C:        "oplog",
-					BSONPath: entry.Path(),
 					Size:     entry.Size(),
+					Location: entry.Path(),
 				}
-				// filterDB is used to mimic CreateIntentsForDB, and since CreateIntentsForDB wouldn't
-				// apply the oplog, even when asked, we don't either.
-				if filterDB != "" || !restore.InputOptions.OplogReplay {
-					if restore.InputOptions.Archive == "" {
-						continue
-					} else {
+				if !restore.InputOptions.OplogReplay {
+					if restore.InputOptions.Archive != "" {
 						mutedOut := &archive.MutedCollection{
 							Intent: oplogIntent,
 							Demux:  restore.archive.Demux,
@@ -205,39 +273,65 @@ func (restore *MongoRestore) CreateAllIntents(dir archive.DirLike, filterDB stri
 							oplogIntent.Namespace(),
 							mutedOut,
 						)
-						continue
 					}
+					continue
 				}
 				if restore.InputOptions.Archive != "" {
+					if restore.InputOptions.Archive == "-" {
+						oplogIntent.Location = "archive on stdin"
+					} else {
+						oplogIntent.Location = fmt.Sprintf("archive '%v'", restore.InputOptions.Archive)
+					}
+
 					// no need to check that we want to cache here
-					oplogIntent.BSONFile =
-						&archive.RegularCollectionReceiver{
-							Intent: oplogIntent,
-							Demux:  restore.archive.Demux,
-						}
+					oplogIntent.BSONFile = &archive.RegularCollectionReceiver{
+						Intent: oplogIntent,
+						Origin: oplogIntent.Namespace(),
+						Demux:  restore.archive.Demux,
+					}
 				} else {
-					oplogIntent.BSONFile = &realBSONFile{intent: oplogIntent, gzip: restore.InputOptions.Gzip}
+					oplogIntent.BSONFile = &realBSONFile{path: entry.Path(), intent: oplogIntent, gzip: restore.InputOptions.Gzip}
 				}
 				restore.manager.Put(oplogIntent)
 			} else {
-				log.Logf(log.Always,
-					`don't know what to do with file "%v", skipping...`,
-					entry.Path(),
-				)
+				log.Logvf(log.Always, `don't know what to do with file "%v", skipping...`, entry.Path())
 			}
 		}
 	}
-	if restore.InputOptions.OplogReplay && !foundOplog {
-		return fmt.Errorf("no %v/oplog.bson file to replay; make sure you run mongodump with --oplog", dir.Path())
+	return nil
+}
+
+// CreateIntentForOplog creates an intent for a file that we want to treat as an oplog.
+func (restore *MongoRestore) CreateIntentForOplog() error {
+	target, err := newActualPath(restore.InputOptions.OplogFile)
+	db := ""
+	collection := "oplog"
+	if err != nil {
+		return err
 	}
+	log.Logvf(log.DebugLow, "reading oplog from %v", target.Path())
+
+	if target.IsDir() {
+		return fmt.Errorf("file %v is a directory, not a bson file", target.Path())
+	}
+
+	// Then create its intent.
+	intent := &intents.Intent{
+		DB:       db,
+		C:        collection,
+		Size:     target.Size(),
+		Location: target.Path(),
+	}
+	intent.BSONFile = &realBSONFile{path: target.Path(), intent: intent, gzip: restore.InputOptions.Gzip}
+	restore.manager.PutOplogIntent(intent, "oplogFile")
 	return nil
 }
 
 // CreateIntentsForDB drills down into the dir folder, creating intents
 // for all of the collection dump files it finds for the db database.
-func (restore *MongoRestore) CreateIntentsForDB(db string, filterCollection string, dir archive.DirLike, mute bool) (err error) {
+func (restore *MongoRestore) CreateIntentsForDB(db string, dir archive.DirLike) (err error) {
 	var entries []archive.DirLike
-	log.Logf(log.DebugHigh, "reading collections for database %v in %v", db, dir.Name())
+	log.Logvf(log.DebugHigh, "reading collections for database %v in %v", db, dir.Name())
 	entries, err = dir.ReadDir()
 	if err != nil {
 		return fmt.Errorf("error reading db folder %v: %v", db, err)
@@ -245,98 +339,142 @@ func (restore *MongoRestore) CreateIntentsForDB(db string, filterCollection stri
 	usesMetadataFiles := hasMetadataFiles(entries)
 	for _, entry := range entries {
 		if entry.IsDir() {
-			log.Logf(log.Always, `don't know what to do with subdirectory "%v", skipping...`,
+			log.Logvf(log.Always, `don't know what to do with subdirectory "%v", skipping...`,
 				filepath.Join(dir.Name(), entry.Name()))
 		} else {
 			collection, fileType := restore.getInfoFromFilename(entry.Name())
+			sourceNS := db + "." + collection
 			switch fileType {
 			case BSONFileType:
-				var skip = mute
+				var skip bool
 				// Dumps of a single database (i.e. with the -d flag) may contain special
 				// db-specific collections that start with a "$" (for example, $admin.system.users
 				// holds the users for a database that was dumped with --dumpDbUsersAndRoles enabled).
 				// If these special files manage to be included in a dump directory during a full
 				// (multi-db) restore, we should ignore them.
-				if restore.ToolOptions.DB == "" && strings.HasPrefix(collection, "$") {
-					log.Logf(log.DebugLow,
-						"not restoring special collection %v.%v", db, collection)
+				if restore.NSOptions.DB == "" && strings.HasPrefix(collection, "$") {
+					log.Logvf(log.DebugLow, "not restoring special collection %v.%v", db, collection)
 					skip = true
 				}
 				// TOOLS-717: disallow restoring to the system.profile collection.
 				// Server versions >= 3.0.3 disallow user inserts to system.profile so
 				// it would likely fail anyway.
 				if collection == "system.profile" {
-					log.Logf(log.DebugLow, "skipping restore of system.profile collection", db)
+					log.Logvf(log.DebugLow, "skipping restore of system.profile collection", db)
 					skip = true
 				}
 				// skip restoring the indexes collection if we are using metadata
 				// files to store index information, to eliminate redundancy
 				if collection == "system.indexes" && usesMetadataFiles {
-					log.Logf(log.DebugLow,
+					log.Logvf(log.DebugLow,
 						"not restoring system.indexes collection because database %v "+
 							"has .metadata.json files", db)
 					skip = true
 				}
-				if filterCollection != "" && filterCollection != collection {
+
+				if !restore.includer.Has(sourceNS) {
+					log.Logvf(log.DebugLow, "skipping restoring %v.%v, it is not included", db, collection)
 					skip = true
 				}
+				if restore.excluder.Has(sourceNS) {
+					log.Logvf(log.DebugLow, "skipping restoring %v.%v, it is excluded", db, collection)
+					skip = true
+				}
+				destNS := restore.renamer.Get(sourceNS)
+				destDB, destC := common.SplitNamespace(destNS)
 				intent := &intents.Intent{
-					DB:       db,
-					C:        collection,
-					Size:     entry.Size(),
-					BSONPath: entry.Path(),
+					DB:   destDB,
+					C:    destC,
+					Size: entry.Size(),
 				}
 				if restore.InputOptions.Archive != "" {
+					if restore.InputOptions.Archive == "-" {
+						intent.Location = "archive on stdin"
+					} else {
+						intent.Location = fmt.Sprintf("archive '%v'", restore.InputOptions.Archive)
+					}
 					if skip {
 						// adding the DemuxOut to the demux, but not adding the intent to the manager
 						mutedOut := &archive.MutedCollection{Intent: intent, Demux: restore.archive.Demux}
-						restore.archive.Demux.Open(intent.Namespace(), mutedOut)
+						restore.archive.Demux.Open(sourceNS, mutedOut)
 						continue
+					}
+					if intent.IsSpecialCollection() {
+						specialCollectionCache := archive.NewSpecialCollectionCache(intent, restore.archive.Demux)
+						intent.BSONFile = specialCollectionCache
+						restore.archive.Demux.Open(sourceNS, specialCollectionCache)
 					} else {
-						if intent.IsSpecialCollection() {
-							intent.BSONFile = &archive.SpecialCollectionCache{Intent: intent, Demux: restore.archive.Demux}
-							restore.archive.Demux.Open(intent.Namespace(), intent.BSONFile)
-						} else {
-							intent.BSONFile = &archive.RegularCollectionReceiver{Intent: intent, Demux: restore.archive.Demux}
+						intent.BSONFile = &archive.RegularCollectionReceiver{
+							Origin: sourceNS,
+							Intent: intent,
+							Demux:  restore.archive.Demux,
 						}
 					}
 				} else {
 					if skip {
 						continue
 					}
-					if restore.useStdin {
-						intent = &intents.Intent{
-							DB:       db,
-							C:        collection,
-							BSONPath: "-",
-						}
-						intent.BSONFile = &stdinFile{intent: intent}
-					} else {
-						intent.BSONFile = &realBSONFile{intent: intent, gzip: restore.InputOptions.Gzip}
-					}
+					intent.Location = entry.Path()
+					intent.BSONFile = &realBSONFile{path: entry.Path(), intent: intent, gzip: restore.InputOptions.Gzip}
 				}
-				log.Logf(log.Info, "found collection %v bson to restore", intent.Namespace())
-				restore.manager.Put(intent)
+				log.Logvf(log.Info, "found collection %v bson to restore to %v", sourceNS, destNS)
+				restore.manager.PutWithNamespace(sourceNS, intent)
 			case MetadataFileType:
+				if collection == "system.profile" {
+					log.Logvf(log.DebugLow, "skipping restore of system.profile metadata")
+					continue
+				}
+				if !restore.includer.Has(sourceNS) {
+					log.Logvf(log.DebugLow, "skipping restoring %v.%v metadata, it is not included", db, collection)
+					continue
+				}
+				if restore.excluder.Has(sourceNS) {
+					log.Logvf(log.DebugLow, "skipping restoring %v.%v metadata, it is excluded", db, collection)
+					continue
+				}
+
 				usesMetadataFiles = true
+				destNS := restore.renamer.Get(sourceNS)
+				rnDB, rnC := common.SplitNamespace(destNS)
 				intent := &intents.Intent{
-					DB:           db,
-					C:            collection,
-					MetadataPath: entry.Path(),
+					DB: rnDB,
+					C:  rnC,
 				}
+
 				if restore.InputOptions.Archive != "" {
-					intent.MetadataFile = &archive.MetadataPreludeFile{Intent: intent, Prelude: restore.archive.Prelude}
+					if restore.InputOptions.Archive == "-" {
+						intent.MetadataLocation = "archive on stdin"
+					} else {
+						intent.MetadataLocation = fmt.Sprintf("archive '%v'", restore.InputOptions.Archive)
+					}
+					intent.MetadataFile = &archive.MetadataPreludeFile{Origin: sourceNS, Intent: intent, Prelude: restore.archive.Prelude}
 				} else {
-					intent.MetadataFile = &realMetadataFile{intent: intent, gzip: restore.InputOptions.Gzip}
+					intent.MetadataLocation = entry.Path()
+					intent.MetadataFile = &realMetadataFile{path: entry.Path(), intent: intent, gzip: restore.InputOptions.Gzip}
 				}
-				log.Logf(log.Info, "found collection %v metadata to restore", intent.Namespace())
-				restore.manager.Put(intent)
+				log.Logvf(log.Info, "found collection metadata from %v to restore to %v", sourceNS, destNS)
+				restore.manager.PutWithNamespace(sourceNS, intent)
 			default:
-				log.Logf(log.Always, `don't know what to do with file "%v", skipping...`,
+				log.Logvf(log.Always, `don't know what to do with file "%v", skipping...`,
 					entry.Path())
 			}
 		}
 	}
+	return nil
+}
+
+// CreateStdinIntentForCollection builds an intent for the given database and collection name
+// that is to be read from standard input
+func (restore *MongoRestore) CreateStdinIntentForCollection(db string, collection string) error {
+	log.Logvf(log.DebugLow, "reading collection %v for database %v from standard input",
+		collection, db)
+	intent := &intents.Intent{
+		DB:       db,
+		C:        collection,
+		Location: "-",
+	}
+	intent.BSONFile = &stdinFile{Reader: restore.InputReader}
+	restore.manager.Put(intent)
 	return nil
 }
 
@@ -347,22 +485,8 @@ func (restore *MongoRestore) CreateIntentsForDB(db string, filterCollection stri
 // This method is not called by CreateIntentsForDB,
 // it is only used in the case where --db and --collection flags are set.
 func (restore *MongoRestore) CreateIntentForCollection(db string, collection string, dir archive.DirLike) error {
-
-	log.Logf(log.DebugLow, "reading collection %v for database %v from %v",
+	log.Logvf(log.DebugLow, "reading collection %v for database %v from %v",
 		collection, db, dir.Path())
-
-	// avoid actual file handling if we are using stdin
-	if restore.useStdin {
-		intent := &intents.Intent{
-			DB:       db,
-			C:        collection,
-			BSONPath: "-",
-		}
-		intent.BSONFile = &stdinFile{intent: intent}
-		restore.manager.Put(intent)
-		return nil
-	}
-
 	// first make sure the bson file exists and is valid
 	_, err := dir.Stat()
 	if err != nil {
@@ -381,34 +505,37 @@ func (restore *MongoRestore) CreateIntentForCollection(db string, collection str
 	intent := &intents.Intent{
 		DB:       db,
 		C:        collection,
-		BSONPath: dir.Path(),
 		Size:     dir.Size(),
+		Location: dir.Path(),
 	}
-	intent.BSONFile = &realBSONFile{intent: intent, gzip: restore.InputOptions.Gzip}
+	intent.BSONFile = &realBSONFile{path: dir.Path(), intent: intent, gzip: restore.InputOptions.Gzip}
 
 	// finally, check if it has a .metadata.json file in its folder
-	log.Logf(log.DebugLow, "scanning directory %v for metadata file", dir.Name())
+	log.Logvf(log.DebugLow, "scanning directory %v for metadata", dir.Name())
 	entries, err := dir.Parent().ReadDir()
 	if err != nil {
 		// try and carry on if we can
-		log.Logf(log.Info, "error attempting to locate metadata for file: %v", err)
-		log.Log(log.Info, "restoring collection without metadata")
+		log.Logvf(log.Info, "error attempting to locate metadata for file: %v", err)
+		log.Logv(log.Info, "restoring collection without metadata")
 		restore.manager.Put(intent)
 		return nil
 	}
 	metadataName := baseName + ".metadata.json"
+	if restore.InputOptions.Gzip {
+		metadataName += ".gz"
+	}
 	for _, entry := range entries {
 		if entry.Name() == metadataName {
 			metadataPath := entry.Path()
-			log.Logf(log.Info, "found metadata for collection at %v", metadataPath)
-			intent.MetadataPath = metadataPath
-			intent.MetadataFile = &realMetadataFile{intent: intent, gzip: restore.InputOptions.Gzip}
+			log.Logvf(log.Info, "found metadata for collection at %v", metadataPath)
+			intent.MetadataLocation = metadataPath
+			intent.MetadataFile = &realMetadataFile{path: metadataPath, intent: intent, gzip: restore.InputOptions.Gzip}
 			break
 		}
 	}
 
-	if intent.MetadataPath == "" {
-		log.Log(log.Info, "restoring collection without metadata")
+	if intent.MetadataFile == nil {
+		log.Logv(log.Info, "restoring collection without metadata")
 	}
 
 	restore.manager.Put(intent)
@@ -435,16 +562,16 @@ func hasMetadataFiles(files []archive.DirLike) bool {
 func (restore *MongoRestore) handleBSONInsteadOfDirectory(path string) error {
 	// we know we have been given a non-directory, so we should handle it
 	// like a bson file and infer as much as we can
-	if restore.ToolOptions.Collection == "" {
+	if restore.NSOptions.Collection == "" {
 		// if the user did not set -c, use the file name for the collection
 		newCollectionName, fileType := restore.getInfoFromFilename(path)
 		if fileType != BSONFileType {
 			return fmt.Errorf("file %v does not have .bson extension", path)
 		}
-		restore.ToolOptions.Collection = newCollectionName
-		log.Logf(log.DebugLow, "inferred collection '%v' from file", restore.ToolOptions.Collection)
+		restore.NSOptions.Collection = newCollectionName
+		log.Logvf(log.DebugLow, "inferred collection '%v' from file", restore.NSOptions.Collection)
 	}
-	if restore.ToolOptions.DB == "" {
+	if restore.NSOptions.DB == "" {
 		// if the user did not set -d, use the directory containing the target
 		// file as the db name (as it would be in a dump directory). If
 		// we cannot determine the directory name, use "test"
@@ -452,8 +579,8 @@ func (restore *MongoRestore) handleBSONInsteadOfDirectory(path string) error {
 		if dirForFile == "." || dirForFile == ".." {
 			dirForFile = "test"
 		}
-		restore.ToolOptions.DB = dirForFile
-		log.Logf(log.DebugLow, "inferred db '%v' from the file's directory", restore.ToolOptions.DB)
+		restore.NSOptions.DB = dirForFile
+		log.Logvf(log.DebugLow, "inferred db '%v' from the file's directory", restore.NSOptions.DB)
 	}
 	return nil
 }

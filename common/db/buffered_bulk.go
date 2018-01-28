@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package db
 
 import (
@@ -17,6 +23,7 @@ type BufferedBulkInserter struct {
 	docLimit        int
 	byteCount       int
 	docCount        int
+	unordered       bool
 }
 
 // NewBufferedBulkInserter returns an initialized BufferedBulkInserter
@@ -32,10 +39,15 @@ func NewBufferedBulkInserter(collection *mgo.Collection, docLimit int,
 	return bb
 }
 
+func (bb *BufferedBulkInserter) Unordered() {
+	bb.unordered = true
+	bb.bulk.Unordered()
+}
+
 // throw away the old bulk and init a new one
 func (bb *BufferedBulkInserter) resetBulk() {
 	bb.bulk = bb.collection.Bulk()
-	if bb.continueOnError {
+	if bb.continueOnError || bb.unordered {
 		bb.bulk.Unordered()
 	}
 	bb.byteCount = 0
@@ -50,7 +62,7 @@ func (bb *BufferedBulkInserter) Insert(doc interface{}) error {
 		return fmt.Errorf("bson encoding error: %v", err)
 	}
 	// flush if we are full
-	if bb.docCount >= bb.docLimit || bb.byteCount+len(rawBytes) > MaxMessageSize {
+	if bb.docCount >= bb.docLimit || bb.byteCount+len(rawBytes) > MaxBSONSize {
 		err = bb.Flush()
 	}
 	// buffer the document

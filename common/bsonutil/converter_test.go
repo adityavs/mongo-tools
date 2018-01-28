@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package bsonutil
 
 import (
@@ -58,7 +64,15 @@ func TestArraysBSONToJSON(t *testing.T) {
 		})
 
 		Convey("should work for arrays with embedded objects", func() {
-			bsonObj := []interface{}{80, bson.M{"a": int64(20), "b": bson.M{"c": bson.RegEx{"hi", "i"}}}}
+			bsonObj := []interface{}{
+				80,
+				bson.M{
+					"a": int64(20),
+					"b": bson.M{
+						"c": bson.RegEx{Pattern: "hi", Options: "i"},
+					},
+				},
+			}
 
 			__jObj, err := ConvertBSONValueToJSON(bsonObj)
 			So(err, ShouldBeNil)

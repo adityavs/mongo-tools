@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package json
 
 import (
@@ -23,6 +29,32 @@ func TestNewKeyword(t *testing.T) {
 			jsonValue, ok := jsonMap[key].(BinData)
 			So(ok, ShouldBeTrue)
 			So(jsonValue, ShouldResemble, BinData{1, "xyz"})
+		})
+
+		Convey("can be used with Boolean constructor", func() {
+			var jsonMap map[string]interface{}
+
+			key := "key"
+			value := `new Boolean(1)`
+			data := fmt.Sprintf(`{"%v":%v}`, key, value)
+
+			err := Unmarshal([]byte(data), &jsonMap)
+			So(err, ShouldBeNil)
+
+			jsonValue, ok := jsonMap[key].(bool)
+			So(ok, ShouldBeTrue)
+			So(jsonValue, ShouldResemble, true)
+
+			key = "key"
+			value = `new Boolean(0)`
+			data = fmt.Sprintf(`{"%v":%v}`, key, value)
+
+			err = Unmarshal([]byte(data), &jsonMap)
+			So(err, ShouldBeNil)
+
+			jsonValue, ok = jsonMap[key].(bool)
+			So(ok, ShouldBeTrue)
+			So(jsonValue, ShouldResemble, false)
 		})
 
 		Convey("can be used with Date constructor", func() {

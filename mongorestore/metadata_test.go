@@ -1,13 +1,19 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package mongorestore
 
 import (
-	"github.com/mongodb/mongo-tools/common/db"
+	"testing"
+
 	"github.com/mongodb/mongo-tools/common/intents"
 	commonOpts "github.com/mongodb/mongo-tools/common/options"
 	"github.com/mongodb/mongo-tools/common/testutil"
 	. "github.com/smartystreets/goconvey/convey"
 	"gopkg.in/mgo.v2/bson"
-	"testing"
 )
 
 const ExistsDB = "restore_collection_exists"
@@ -15,18 +21,13 @@ const ExistsDB = "restore_collection_exists"
 func TestCollectionExists(t *testing.T) {
 
 	testutil.VerifyTestType(t, testutil.IntegrationTestType)
+	_, err := testutil.GetBareSession()
+	if err != nil {
+		t.Fatalf("No server available")
+	}
 
 	Convey("With a test mongorestore", t, func() {
-		ssl := testutil.GetSSLOptions()
-		auth := testutil.GetAuthOptions()
-		sessionProvider, err := db.NewSessionProvider(commonOpts.ToolOptions{
-			Connection: &commonOpts.Connection{
-				Host: "localhost",
-				Port: db.DefaultTestPort,
-			},
-			Auth: &auth,
-			SSL:  &ssl,
-		})
+		sessionProvider, _, err := testutil.GetBareSessionProvider()
 		So(err, ShouldBeNil)
 
 		restore := &MongoRestore{
@@ -60,6 +61,7 @@ func TestCollectionExists(t *testing.T) {
 
 			Reset(func() {
 				session.DB(ExistsDB).DropDatabase()
+				session.Close()
 			})
 		})
 
@@ -87,6 +89,7 @@ func TestGetDumpAuthVersion(t *testing.T) {
 			restore = &MongoRestore{
 				InputOptions: &InputOptions{},
 				ToolOptions:  &commonOpts.ToolOptions{},
+				NSOptions:    &NSOptions{},
 			}
 			Convey("auth version 1 should be detected", func() {
 				restore.manager = intents.NewIntentManager()
@@ -100,9 +103,9 @@ func TestGetDumpAuthVersion(t *testing.T) {
 				intent := &intents.Intent{
 					DB:       "admin",
 					C:        "system.version",
-					BSONPath: "testdata/auth_version_3.bson",
+					Location: "testdata/auth_version_3.bson",
 				}
-				intent.BSONFile = &realBSONFile{intent: intent}
+				intent.BSONFile = &realBSONFile{path: "testdata/auth_version_3.bson", intent: intent}
 				restore.manager.Put(intent)
 				version, err := restore.GetDumpAuthVersion()
 				So(err, ShouldBeNil)
@@ -114,9 +117,9 @@ func TestGetDumpAuthVersion(t *testing.T) {
 				intent := &intents.Intent{
 					DB:       "admin",
 					C:        "system.version",
-					BSONPath: "testdata/auth_version_5.bson",
+					Location: "testdata/auth_version_5.bson",
 				}
-				intent.BSONFile = &realBSONFile{intent: intent}
+				intent.BSONFile = &realBSONFile{path: "testdata/auth_version_5.bson", intent: intent}
 				restore.manager.Put(intent)
 				version, err := restore.GetDumpAuthVersion()
 				So(err, ShouldBeNil)
@@ -129,10 +132,9 @@ func TestGetDumpAuthVersion(t *testing.T) {
 				InputOptions: &InputOptions{
 					RestoreDBUsersAndRoles: true,
 				},
-				ToolOptions: &commonOpts.ToolOptions{
-					Namespace: &commonOpts.Namespace{
-						DB: "TestDB",
-					},
+				ToolOptions: &commonOpts.ToolOptions{},
+				NSOptions: &NSOptions{
+					DB: "TestDB",
 				},
 			}
 
@@ -148,9 +150,9 @@ func TestGetDumpAuthVersion(t *testing.T) {
 				intent := &intents.Intent{
 					DB:       "admin",
 					C:        "system.version",
-					BSONPath: "testdata/auth_version_3.bson",
+					Location: "testdata/auth_version_3.bson",
 				}
-				intent.BSONFile = &realBSONFile{intent: intent}
+				intent.BSONFile = &realBSONFile{path: "testdata/auth_version_3.bson", intent: intent}
 				restore.manager.Put(intent)
 				version, err := restore.GetDumpAuthVersion()
 				So(err, ShouldBeNil)
@@ -162,9 +164,9 @@ func TestGetDumpAuthVersion(t *testing.T) {
 				intent := &intents.Intent{
 					DB:       "admin",
 					C:        "system.version",
-					BSONPath: "testdata/auth_version_5.bson",
+					Location: "testdata/auth_version_5.bson",
 				}
-				intent.BSONFile = &realBSONFile{intent: intent}
+				intent.BSONFile = &realBSONFile{path: "testdata/auth_version_5.bson", intent: intent}
 				restore.manager.Put(intent)
 				version, err := restore.GetDumpAuthVersion()
 				So(err, ShouldBeNil)

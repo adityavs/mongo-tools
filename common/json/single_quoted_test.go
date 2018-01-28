@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package json
 
 import (
@@ -88,6 +94,21 @@ func TestSingleQuotedValues(t *testing.T) {
 			So(ok, ShouldBeTrue)
 			So(jsonValue.Type, ShouldEqual, 1)
 			So(jsonValue.Base64, ShouldEqual, "xyz")
+		})
+
+		Convey("can be used within Boolean constructor", func() {
+			var jsonMap map[string]interface{}
+
+			key := "boolean"
+			value := "Boolean('xyz')"
+			data := fmt.Sprintf(`{"%v":%v}`, key, value)
+
+			err := Unmarshal([]byte(data), &jsonMap)
+			So(err, ShouldBeNil)
+
+			jsonValue, ok := jsonMap[key].(bool)
+			So(ok, ShouldBeTrue)
+			So(jsonValue, ShouldEqual, true)
 		})
 
 		Convey("can be used within DBRef constructor", func() {

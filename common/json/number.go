@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package json
 
 import (
@@ -71,13 +77,13 @@ func (d *decodeState) getNumberInt() interface{} {
 	case string:
 		number = Number(v)
 	default:
-		d.error(fmt.Errorf("expected int32 for first argument of NumberInt constructor, got %t", v))
+		d.error(fmt.Errorf("expected int32 for first argument of NumberInt constructor, got %T (value was %v)", v, v))
 	}
 
 	d.useNumber = useNumber
 	arg0, err := number.Int32()
 	if err != nil {
-		d.error(fmt.Errorf("expected int32 for first argument of NumberInt constructor, got %t", number))
+		d.error(fmt.Errorf("expected int32 for first argument of NumberInt constructor, got %T (value was %v)", number, number))
 	}
 	return NumberInt(arg0)
 }
@@ -124,14 +130,13 @@ func (d *decodeState) getNumberLong() interface{} {
 		number = Number(v)
 
 	default:
-		d.error(fmt.Errorf("expected int64 for first argument of NumberLong constructor, got %t", v))
-
+		d.error(fmt.Errorf("expected int64 for first argument of NumberLong constructor, got %T (value was %v)", v, v))
 	}
 
 	d.useNumber = useNumber
 	arg0, err := number.Int64()
 	if err != nil {
-		d.error(fmt.Errorf("expected int64 for first argument of NumberLong constructor, got %t", number))
+		d.error(fmt.Errorf("expected int64 for first argument of NumberLong constructor, got %T (value was %v)", number, number))
 	}
 	return NumberLong(arg0)
 }

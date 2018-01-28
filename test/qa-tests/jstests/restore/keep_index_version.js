@@ -1,88 +1,90 @@
 (function() {
 
-    if (typeof getToolTest === 'undefined') {
-        load('jstests/configs/plain_28.config.js');
-    }
+  load('jstests/common/check_version.js');
 
-    if (TestData && TestData.storageEngine === 'wiredTiger'){
-      return
-    }
+  if (typeof getToolTest === 'undefined') {
+    load('jstests/configs/plain_28.config.js');
+  }
 
-    // Tests that running mongorestore with --keepIndexVersion does not 
-    // update the index version, and that running it without 
-    // --keepIndexVersion does.
+  // Tests that running mongorestore with --keepIndexVersion does not
+  // update the index version, and that running it without
+  // --keepIndexVersion does.
 
-    jsTest.log('Testing mongorestore with --keepIndexVersion');
+  jsTest.log('Testing mongorestore with --keepIndexVersion');
 
-    var toolTest = getToolTest('keep_index_version');
-    var commonToolArgs = getCommonToolArguments();
+  var toolTest = getToolTest('keep_index_version');
+  var commonToolArgs = getCommonToolArguments();
 
-    // where we'll put the dump
-    var dumpTarget = 'keep_index_version_dump';
-    resetDbpath(dumpTarget);
+  // where we'll put the dump
+  var dumpTarget = 'keep_index_version_dump';
+  resetDbpath(dumpTarget);
 
-    // the db and collection we will use
-    var testDB = toolTest.db.getSiblingDB('test');
-    var testColl = testDB.coll;
+  // the db and collection we will use
+  var testDB = toolTest.db.getSiblingDB('test');
+  var testColl = testDB.coll;
 
-    // create a version 0 index on the collection
-    testColl.ensureIndex({num: 1}, {v: 0});
+  if (isAtLeastVersion(testDB.version(), '3.1.0')) {
+    jsTest.log("skipping test on "+testDB.version());
+    return;
+  }
+  if (TestData && TestData.storageEngine === 'wiredTiger') {
+    jsTest.log("skipping test on "+testDB.version()+" when storage engine is wiredTiger");
+    return;
+  }
 
-    // insert some data
-    for (var i = 0; i < 10; i++) {
-        testColl.insert({num: i});
-    }
-    // sanity check the insert worked
-    assert.eq(10, testColl.count());
+  // create a version 0 index on the collection
+  testColl.ensureIndex({num: 1}, {v: 0});
 
-    // dump the data
-    var ret = toolTest.runTool.apply(
-            toolTest,
-            ['dump'].
-            concat(getDumpTarget(dumpTarget)).
-                concat(commonToolArgs));
-    assert.eq(0, ret);
+  // insert some data
+  var data = [];
+  for (var i = 0; i < 10; i++) {
+    data.push({num: i});
+  }
+  testColl.insertMany(data);
+  // sanity check the insert worked
+  assert.eq(10, testColl.count());
 
-    // drop the db
-    testDB.dropDatabase();
+  // dump the data
+  var ret = toolTest.runTool.apply(toolTest, ['dump']
+    .concat(getDumpTarget(dumpTarget))
+    .concat(commonToolArgs));
+  assert.eq(0, ret);
 
-    // restore the data
-    ret = toolTest.runTool.apply(
-            toolTest,
-            ['restore'].
-            concat(getRestoreTarget(dumpTarget)).
-                concat(commonToolArgs)
-    );
-    assert.eq(0, ret);
+  // drop the db
+  testDB.dropDatabase();
 
-    // make sure the data was restored correctly
-    assert.eq(10, testColl.count());
+  // restore the data
+  ret = toolTest.runTool.apply(toolTest, ['restore']
+    .concat(getRestoreTarget(dumpTarget))
+    .concat(commonToolArgs));
+  assert.eq(0, ret);
 
-    // make sure the index version was updated
-    var indexes = testColl.getIndexes();
-    assert.eq(2, indexes.length);
-    assert.eq(1, indexes[1].v);
+  // make sure the data was restored correctly
+  assert.eq(10, testColl.count());
 
-    // drop the db
-    testDB.dropDatabase();
+  // make sure the index version was updated
+  var indexes = testColl.getIndexes();
+  assert.eq(2, indexes.length);
+  assert.eq(1, indexes[1].v);
 
-    // restore the data with --keepIndexVersion specified
-    ret = toolTest.runTool.apply(
-            toolTest,
-            ['restore', '--keepIndexVersion'].
-            concat(getRestoreTarget(dumpTarget)).
-                concat(commonToolArgs));
-    assert.eq(0, ret);
+  // drop the db
+  testDB.dropDatabase();
 
-    // make sure the data was restored correctly
-    assert.eq(10, testColl.count());
+  // restore the data with --keepIndexVersion specified
+  ret = toolTest.runTool.apply(toolTest, ['restore', '--keepIndexVersion']
+    .concat(getRestoreTarget(dumpTarget))
+    .concat(commonToolArgs));
+  assert.eq(0, ret);
 
-    // make sure the index version was not updated
-    indexes = testColl.getIndexes();
-    assert.eq(2, indexes.length);
-    assert.eq(0, indexes[1].v);
+  // make sure the data was restored correctly
+  assert.eq(10, testColl.count());
 
-    // success
-    toolTest.stop();
+  // make sure the index version was not updated
+  indexes = testColl.getIndexes();
+  assert.eq(2, indexes.length);
+  assert.eq(0, indexes[1].v);
+
+  // success
+  toolTest.stop();
 
 }());

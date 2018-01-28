@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package util
 
 import (
@@ -24,16 +30,22 @@ func SliceContains(slice, elt interface{}) bool {
 	return false
 }
 
+// StringSliceContains reports whether str is in the slice.
 func StringSliceContains(slice []string, str string) bool {
-	if slice == nil {
-		return false
-	}
-	for _, element := range slice {
-		if element == str {
-			return true
+	return StringSliceIndex(slice, str) != -1
+}
+
+// StringSliceContains returns the first index at which the given element
+// can be found in the slice, or -1 if it is not present.
+func StringSliceIndex(slice []string, str string) int {
+	i := -1
+	for j, v := range slice {
+		if v == str {
+			i = j
+			break
 		}
 	}
-	return false
+	return i
 }
 
 // generic function that returns number of instances of 'elt' in 'slice'.

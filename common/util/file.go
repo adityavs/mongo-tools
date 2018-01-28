@@ -1,7 +1,14 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package util
 
 import (
 	"bufio"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -31,4 +38,32 @@ func GetFieldsFromFile(path string) ([]string, error) {
 // replaced by multiple separators
 func ToUniversalPath(path string) string {
 	return filepath.FromSlash(path)
+}
+
+type WrappedReadCloser struct {
+	io.ReadCloser
+	Inner io.ReadCloser
+}
+
+func (wrc *WrappedReadCloser) Close() error {
+	outerErr := wrc.ReadCloser.Close()
+	innerErr := wrc.Inner.Close()
+	if outerErr != nil {
+		return outerErr
+	}
+	return innerErr
+}
+
+type WrappedWriteCloser struct {
+	io.WriteCloser
+	Inner io.WriteCloser
+}
+
+func (wwc *WrappedWriteCloser) Close() error {
+	outerErr := wwc.WriteCloser.Close()
+	innerErr := wwc.Inner.Close()
+	if outerErr != nil {
+		return outerErr
+	}
+	return innerErr
 }

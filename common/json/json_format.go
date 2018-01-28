@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package json
 
 import (
@@ -15,6 +21,11 @@ func (b BinData) MarshalJSON() ([]byte, error) {
 	data := fmt.Sprintf(`{ "$binary": "%v", "$type": "%0x" }`,
 		b.Base64, []byte{b.Type})
 	return []byte(data), nil
+}
+
+func (d128 Decimal128) MarshalJSON() ([]byte, error) {
+	s := d128.Decimal128.String()
+	return []byte(fmt.Sprintf(`{ "$numberDecimal" : "%s" }`, s)), nil
 }
 
 func (js JavaScript) MarshalJSON() ([]byte, error) {
@@ -137,8 +148,12 @@ func (o ObjectId) MarshalJSON() ([]byte, error) {
 }
 
 func (r RegExp) MarshalJSON() ([]byte, error) {
-	data := fmt.Sprintf(`{ "$regex": "%v", "$options": "%v" }`,
-		r.Pattern, r.Options)
+	pattern, err := Marshal(r.Pattern)
+	if err != nil {
+		return nil, err
+	}
+	data := fmt.Sprintf(`{ "$regex": %v, "$options": "%v" }`,
+		string(pattern), r.Options)
 	return []byte(data), nil
 }
 

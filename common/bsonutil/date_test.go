@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package bsonutil
 
 import (
@@ -117,6 +123,43 @@ func TestDateValue(t *testing.T) {
 				jsonMap := map[string]interface{}{
 					key: map[string]interface{}{
 						"$date": float64(1136214245000),
+					},
+				}
+
+				err := ConvertJSONDocumentToBSON(jsonMap)
+				So(err, ShouldBeNil)
+
+				jsonValue, ok := jsonMap[key].(time.Time)
+				So(ok, ShouldBeTrue)
+				So(jsonValue.Equal(date), ShouldBeTrue)
+			})
+			Convey(`of numeric int32 ('{ "$date": 2136800000 }')`, func() {
+				key := "key"
+
+				date = time.Unix(0, int64(time.Duration(2136800000)*time.Millisecond))
+
+				jsonMap := map[string]interface{}{
+					key: map[string]interface{}{
+						"$date": int32(2136800000),
+					},
+				}
+
+				err := ConvertJSONDocumentToBSON(jsonMap)
+				So(err, ShouldBeNil)
+
+				jsonValue, ok := jsonMap[key].(time.Time)
+				So(ok, ShouldBeTrue)
+				So(jsonValue.Equal(date), ShouldBeTrue)
+			})
+
+			Convey(`of negative numeric int32 ('{ "$date": -2136800000 }')`, func() {
+				key := "key"
+
+				date = time.Unix(0, int64(time.Duration(-2136800000)*time.Millisecond))
+
+				jsonMap := map[string]interface{}{
+					key: map[string]interface{}{
+						"$date": int32(-2136800000),
 					},
 				}
 

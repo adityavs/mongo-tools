@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package db
 
 import (
@@ -6,6 +12,7 @@ import (
 	. "github.com/smartystreets/goconvey/convey"
 	"gopkg.in/mgo.v2"
 	"testing"
+	"time"
 )
 
 func TestVanillaDBConnector(t *testing.T) {
@@ -31,7 +38,7 @@ func TestVanillaDBConnector(t *testing.T) {
 			So(connector.Configure(opts), ShouldBeNil)
 			So(connector.dialInfo.Addrs, ShouldResemble,
 				[]string{"host1:20000", "host2:20000"})
-			So(connector.dialInfo.Timeout, ShouldResemble, DefaultDialTimeout)
+			So(connector.dialInfo.Timeout, ShouldResemble, time.Duration(opts.Timeout)*time.Second)
 
 		})
 

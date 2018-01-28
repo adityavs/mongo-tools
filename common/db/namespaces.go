@@ -1,19 +1,61 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package db
 
 import (
+	"encoding/hex"
 	"fmt"
-	"github.com/mongodb/mongo-tools/common/bsonutil"
+	"strings"
+
 	"github.com/mongodb/mongo-tools/common/log"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"strings"
 )
+
+type CollectionInfo struct {
+	Name    string  `bson:"name"`
+	Type    string  `bson:"type"`
+	Options *bson.D `bson:"options"`
+	Info    *bson.D `bson:"info"`
+}
+
+func (ci *CollectionInfo) IsView() bool {
+	return ci.Type == "view"
+}
+
+func (ci *CollectionInfo) GetUUID() string {
+	if ci.Info == nil {
+		return ""
+	}
+	for _, v := range *ci.Info {
+		if v.Name == "uuid" {
+			switch x := v.Value.(type) {
+			case bson.Binary:
+				if x.Kind == 4 {
+					return hex.EncodeToString(x.Data)
+				}
+			}
+		}
+	}
+	return ""
+}
 
 // IsNoCmd reeturns true if err indicates a query command is not supported,
 // otherwise, returns false.
 func IsNoCmd(err error) bool {
 	e, ok := err.(*mgo.QueryError)
 	return ok && strings.HasPrefix(e.Message, "no such cmd:")
+}
+
+// IsNoNamespace returns true if err indicates a query resulted in a
+// "NamespaceNotFound" error otherwise, returns false.
+func IsNoNamespace(err error) bool {
+	e, ok := err.(*mgo.QueryError)
+	return ok && e.Code == 26
 }
 
 // buildBsonArray takes a cursor iterator and returns an array of
@@ -35,11 +77,12 @@ func buildBsonArray(iter *mgo.Iter) ([]bson.D, error) {
 
 // GetIndexes returns an iterator to thethe raw index info for a collection by
 // using the listIndexes command if available, or by falling back to querying
-// against system.indexes (pre-3.0 systems).
+// against system.indexes (pre-3.0 systems). nil is returned if the collection
+// does not exist.
 func GetIndexes(coll *mgo.Collection) (*mgo.Iter, error) {
 	var cmdResult struct {
 		Cursor struct {
-			FirstBatch []bson.Raw "firstBatch"
+			FirstBatch []bson.Raw `bson:"firstBatch"`
 			NS         string
 			Id         int64
 		}
@@ -57,8 +100,10 @@ func GetIndexes(coll *mgo.Collection) (*mgo.Iter, error) {
 		ses := coll.Database.Session
 		return ses.DB(ns[0]).C(ns[1]).NewIter(ses, cmdResult.Cursor.FirstBatch, cmdResult.Cursor.Id, nil), nil
 	case IsNoCmd(err):
-		log.Logf(log.DebugLow, "No support for listIndexes command, falling back to querying system.indexes")
+		log.Logvf(log.DebugLow, "No support for listIndexes command, falling back to querying system.indexes")
 		return getIndexesPre28(coll)
+	case IsNoNamespace(err):
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("error running `listIndexes`. Collection: `%v` Err: %v", coll.FullName, err)
 	}
@@ -73,7 +118,7 @@ func getIndexesPre28(coll *mgo.Collection) (*mgo.Iter, error) {
 func GetCollections(database *mgo.Database, name string) (*mgo.Iter, bool, error) {
 	var cmdResult struct {
 		Cursor struct {
-			FirstBatch []bson.Raw "firstBatch"
+			FirstBatch []bson.Raw `bson:"firstBatch"`
 			NS         string
 			Id         int64
 		}
@@ -95,7 +140,7 @@ func GetCollections(database *mgo.Database, name string) (*mgo.Iter, bool, error
 
 		return database.Session.DB(ns[0]).C(ns[1]).NewIter(database.Session, cmdResult.Cursor.FirstBatch, cmdResult.Cursor.Id, nil), false, nil
 	case IsNoCmd(err):
-		log.Logf(log.DebugLow, "No support for listCollections command, falling back to querying system.namespaces")
+		log.Logvf(log.DebugLow, "No support for listCollections command, falling back to querying system.namespaces")
 		iter, err := getCollectionsPre28(database, name)
 		return iter, true, err
 	default:
@@ -114,36 +159,42 @@ func getCollectionsPre28(database *mgo.Database, name string) (*mgo.Iter, error)
 	return iter, nil
 }
 
-func GetCollectionOptions(coll *mgo.Collection) (*bson.D, error) {
+func GetCollectionInfo(coll *mgo.Collection) (*CollectionInfo, error) {
 	iter, useFullName, err := GetCollections(coll.Database, coll.Name)
 	if err != nil {
 		return nil, err
 	}
+	defer iter.Close()
 	comparisonName := coll.Name
 	if useFullName {
 		comparisonName = coll.FullName
 	}
-	collInfo := &bson.D{}
+
+	collInfo := &CollectionInfo{}
 	for iter.Next(collInfo) {
-		name, err := bsonutil.FindValueByKey("name", collInfo)
-		if err != nil {
-			collInfo = nil
-			continue
-		}
-		if nameStr, ok := name.(string); ok {
-			if nameStr == comparisonName {
-				// we've found the collection we're looking for
-				return collInfo, nil
+		if collInfo.Name == comparisonName {
+			if useFullName {
+				collName, err := StripDBFromNamespace(collInfo.Name, coll.Database.Name)
+				if err != nil {
+					return nil, err
+				}
+				collInfo.Name = collName
 			}
-		} else {
-			collInfo = nil
-			continue
+			break
 		}
 	}
-	err = iter.Err()
-	if err != nil {
+	if err := iter.Err(); err != nil {
 		return nil, err
 	}
-	// The given collection was not found, but no error encountered.
-	return nil, nil
+	return collInfo, nil
+}
+
+func StripDBFromNamespace(namespace string, dbName string) (string, error) {
+	namespacePrefix := dbName + "."
+	// if the collection info came from querying system.indexes (2.6 or earlier) then the
+	// "name" we get includes the db name as well, so we must remove it
+	if strings.HasPrefix(namespace, namespacePrefix) {
+		return namespace[len(namespacePrefix):], nil
+	}
+	return "", fmt.Errorf("namespace '%v' format is invalid - expected to start with '%v'", namespace, namespacePrefix)
 }

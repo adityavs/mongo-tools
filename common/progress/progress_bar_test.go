@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 // +build !race
 
 // Disable race detector since these tests are inherently racy
@@ -27,6 +33,8 @@ func TestBasicProgressBar(t *testing.T) {
 
 		Convey("running it while incrementing its counter", func() {
 			pbar.Start()
+			// TODO make this test non-racy and reliable
+			time.Sleep(10 * time.Millisecond)
 			// iterate though each value 1-10, sleeping to make sure it is written
 			for localCounter := 0; localCounter < 10; localCounter++ {
 				watching.Inc(1)
@@ -91,18 +99,19 @@ func TestBarConcurrency(t *testing.T) {
 			Writer:   writeBuffer,
 		}
 
-		Convey("starting and stopping it using some sketchy timing", func() {
+		Convey("if it rendered only once", func() {
 			pbar.Start()
 			time.Sleep(15 * time.Millisecond)
-			pbar.Stop()
-			// change this value after stopping and make sure it never gets used
-			watching.Inc(-558)
-			time.Sleep(15 * time.Millisecond)
+			watching.Inc(1)
+			results := writeBuffer.String()
+			So(results, ShouldContainSubstring, "777")
+			So(results, ShouldNotContainSubstring, "778")
 
-			Convey("the bar should have only logged one count", func() {
+			Convey("it will render a second time on stop", func() {
+				pbar.Stop()
 				results := writeBuffer.String()
 				So(results, ShouldContainSubstring, "777")
-				So(results, ShouldNotContainSubstring, "219")
+				So(results, ShouldContainSubstring, "778")
 
 				Convey("and trying to start or stop the bar again should panic", func() {
 					So(func() { pbar.Start() }, ShouldPanic)

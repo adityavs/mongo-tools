@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 // Package bsonutil provides utilities for processing BSON data.
 package bsonutil
 
@@ -25,9 +31,8 @@ func ConvertJSONDocumentToBSON(doc map[string]interface{}) error {
 		var err error
 
 		switch v := jsonValue.(type) {
-		case map[string]interface{}: // subdocument
+		case map[string]interface{}, bson.D: // subdocument
 			bsonValue, err = ParseSpecialKeys(v)
-
 		default:
 			bsonValue, err = ConvertJSONValueToBSON(v)
 		}
@@ -48,7 +53,7 @@ func GetExtendedBsonD(doc bson.D) (bson.D, error) {
 	for _, docElem := range doc {
 		var bsonValue interface{}
 		switch v := docElem.Value.(type) {
-		case map[string]interface{}: // subdocument
+		case map[string]interface{}, bson.D: // subdocument
 			bsonValue, err = ParseSpecialKeys(v)
 		default:
 			bsonValue, err = ConvertJSONValueToBSON(v)
@@ -56,7 +61,10 @@ func GetExtendedBsonD(doc bson.D) (bson.D, error) {
 		if err != nil {
 			return nil, err
 		}
-		bsonDoc = append(bsonDoc, bson.DocElem{docElem.Name, bsonValue})
+		bsonDoc = append(bsonDoc, bson.DocElem{
+			Name:  docElem.Name,
+			Value: bsonValue,
+		})
 	}
 	return bsonDoc, nil
 }
@@ -75,13 +83,34 @@ func FindValueByKey(keyName string, document *bson.D) (interface{}, error) {
 // ParseSpecialKeys takes a JSON document and inspects it for any extended JSON
 // type (e.g $numberLong) and replaces any such values with the corresponding
 // BSON type.
-func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
+func ParseSpecialKeys(special interface{}) (interface{}, error) {
+	// first ensure we are using a correct document type
+	var doc map[string]interface{}
+	switch v := special.(type) {
+	case bson.D:
+		doc = v.Map()
+	case map[string]interface{}:
+		doc = v
+	default:
+		return nil, fmt.Errorf("%v (type %T) is not valid input to ParseSpecialKeys", special, special)
+	}
+	// check document to see if it is special
 	switch len(doc) {
 	case 1: // document has a single field
 		if jsonValue, ok := doc["$date"]; ok {
 			switch v := jsonValue.(type) {
 			case string:
 				return util.FormatDate(v)
+			case bson.D:
+				asMap := v.Map()
+				if jsonValue, ok := asMap["$numberLong"]; ok {
+					n, err := parseNumberLongField(jsonValue)
+					if err != nil {
+						return nil, err
+					}
+					return time.Unix(n/1e3, n%1e3*1e6), err
+				}
+				return nil, errors.New("expected $numberLong field in $date")
 			case map[string]interface{}:
 				if jsonValue, ok := v["$numberLong"]; ok {
 					n, err := parseNumberLongField(jsonValue)
@@ -95,8 +124,10 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 			case json.Number:
 				n, err := v.Int64()
 				return time.Unix(n/1e3, n%1e3*1e6), err
-
 			case float64:
+				n := int64(v)
+				return time.Unix(n/1e3, n%1e3*1e6), nil
+			case int32:
 				n := int64(v)
 				return time.Unix(n/1e3, n%1e3*1e6), nil
 			case int64:
@@ -151,8 +182,13 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 		if jsonValue, ok := doc["$timestamp"]; ok {
 			ts := json.Timestamp{}
 
-			tsDoc, ok := jsonValue.(map[string]interface{})
-			if !ok {
+			var tsDoc map[string]interface{}
+			switch internalDoc := jsonValue.(type) {
+			case map[string]interface{}:
+				tsDoc = internalDoc
+			case bson.D:
+				tsDoc = internalDoc.Map()
+			default:
 				return nil, errors.New("expected $timestamp key to have internal document")
 			}
 
@@ -176,6 +212,15 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 			}
 			// see BSON spec for details on the bit fiddling here
 			return bson.MongoTimestamp(int64(ts.Seconds)<<32 | int64(ts.Increment)), nil
+		}
+
+		if jsonValue, ok := doc["$numberDecimal"]; ok {
+			switch v := jsonValue.(type) {
+			case string:
+				return bson.ParseDecimal128(v)
+			default:
+				return nil, errors.New("expected $numberDecimal field to have string value")
+			}
 		}
 
 		if _, ok := doc["$undefined"]; ok {
@@ -202,7 +247,7 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 
 			if jsonValue, ok = doc["$scope"]; ok {
 				switch v2 := jsonValue.(type) {
-				case map[string]interface{}:
+				case map[string]interface{}, bson.D:
 					x, err := ParseSpecialKeys(v2)
 					if err != nil {
 						return nil, err
@@ -296,7 +341,7 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 			}
 			if jsonValue, ok = doc["$id"]; ok {
 				switch v2 := jsonValue.(type) {
-				case map[string]interface{}:
+				case map[string]interface{}, bson.D:
 					x, err := ParseSpecialKeys(v2)
 					if err != nil {
 						return nil, fmt.Errorf("error parsing $id field: %v", err)
@@ -320,7 +365,7 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 			}
 			if jsonValue, ok = doc["$id"]; ok {
 				switch v2 := jsonValue.(type) {
-				case map[string]interface{}:
+				case map[string]interface{}, bson.D:
 					x, err := ParseSpecialKeys(v2)
 					if err != nil {
 						return nil, fmt.Errorf("error parsing $id field: %v", err)
@@ -342,15 +387,22 @@ func ParseSpecialKeys(doc map[string]interface{}) (interface{}, error) {
 		}
 	}
 
-	// Did not match any special ('$') keys, so convert all sub-values.
-	return ConvertJSONValueToBSON(doc)
+	// nothing matched, so we recurse deeper
+	switch v := special.(type) {
+	case bson.D:
+		return GetExtendedBsonD(v)
+	case map[string]interface{}:
+		return ConvertJSONValueToBSON(v)
+	default:
+		return nil, fmt.Errorf("%v (type %T) is not valid input to ParseSpecialKeys", special, special)
+	}
 }
 
 // ParseJSONValue takes any value generated by the json package and returns a
 // BSON version of that value.
 func ParseJSONValue(jsonValue interface{}) (interface{}, error) {
 	switch v := jsonValue.(type) {
-	case map[string]interface{}: // subdocument
+	case map[string]interface{}, bson.D: // subdocument
 		return ParseSpecialKeys(v)
 
 	default:

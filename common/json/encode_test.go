@@ -1,6 +1,11 @@
-// Copyright 2011 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+//
+// Based on github.com/golang/go by The Go Authors
+// See THIRD-PARTY-NOTICES for original license terms.
 
 package json
 
@@ -212,10 +217,10 @@ func TestRefValMarshal(t *testing.T) {
 	}
 }
 
-// C implements Marshaler and returns unescaped JSON.
-type C int
+// C1 implements Marshaler and returns unescaped JSON.
+type C1 int
 
-func (C) MarshalJSON() ([]byte, error) {
+func (C1) MarshalJSON() ([]byte, error) {
 	return []byte(`"<&>"`), nil
 }
 
@@ -227,14 +232,14 @@ func (CText) MarshalText() ([]byte, error) {
 }
 
 func TestMarshalerEscaping(t *testing.T) {
-	var c C
+	var c C1
 	want := `"\u003c\u0026\u003e"`
 	b, err := Marshal(c)
 	if err != nil {
-		t.Fatalf("Marshal(c): %v", err)
+		t.Fatalf("Marshal(c1): %v", err)
 	}
 	if got := string(b); got != want {
-		t.Errorf("Marshal(c) = %#q, want %#q", got, want)
+		t.Errorf("Marshal(c1) = %#q, want %#q", got, want)
 	}
 
 	var ct CText

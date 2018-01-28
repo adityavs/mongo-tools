@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package db
 
 import (
@@ -22,6 +28,8 @@ func TestBufferedBulkInserterInserts(t *testing.T) {
 			Auth: &options.Auth{},
 		}
 		provider, err := NewSessionProvider(opts)
+		So(provider, ShouldNotBeNil)
+		So(err, ShouldBeNil)
 		session, err := provider.GetSession()
 		So(session, ShouldNotBeNil)
 		So(err, ShouldBeNil)
@@ -72,6 +80,8 @@ func TestBufferedBulkInserterInserts(t *testing.T) {
 			So(bufBulk, ShouldNotBeNil)
 
 			Convey("inserting 1,000,000 documents into the BufferedBulkInserter and flushing", func() {
+				session.SetSocketTimeout(0)
+
 				for i := 0; i < 1000000; i++ {
 					bufBulk.Insert(bson.M{"_id": i})
 				}
@@ -100,6 +110,8 @@ func TestBufferedBulkInserterInserts(t *testing.T) {
 
 		Reset(func() {
 			session.DB("tools-test").DropDatabase()
+			session.Close()
+			provider.Close()
 		})
 	})
 

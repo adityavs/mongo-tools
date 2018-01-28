@@ -1,3 +1,9 @@
+// Copyright (C) MongoDB, Inc. 2014-present.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License. You may obtain
+// a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
 package bsonutil
 
 import (
@@ -19,12 +25,16 @@ func (md MarshalD) MarshalJSON() ([]byte, error) {
 	var buff bytes.Buffer
 	buff.WriteString("{")
 	for i, item := range md {
-		key := fmt.Sprintf(`"%s":`, item.Name)
+		key, err := json.Marshal(item.Name)
+		if err != nil {
+			return nil, fmt.Errorf("cannot marshal key %v: %v", item.Name, err)
+		}
 		val, err := json.Marshal(item.Value)
 		if err != nil {
-			return nil, fmt.Errorf("cannot marshal %v: %v", item.Value, err)
+			return nil, fmt.Errorf("cannot marshal value %v: %v", item.Value, err)
 		}
-		buff.WriteString(key)
+		buff.Write(key)
+		buff.WriteString(":")
 		buff.Write(val)
 		if i != len(md)-1 {
 			buff.WriteString(",")

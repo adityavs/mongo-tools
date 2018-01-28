@@ -1,5 +1,6 @@
 load("jstests/configs/standard_dump_targets.config.js");
 
+/* exported getToolTest */
 var getToolTest;
 
 (function() {
@@ -9,12 +10,12 @@ var getToolTest;
     var replTest = new ReplSetTest({
       name: 'tool_replset',
       nodes: 3,
-      oplogSize: 5
+      oplogSize: 5,
     });
 
-    var nodes = replTest.startSet();
+    replTest.startSet();
     replTest.initiate();
-    var master = replTest.getMaster();
+    var master = replTest.getPrimary();
 
     toolTest.m = master;
     toolTest.db = master.getDB(name);
@@ -30,8 +31,9 @@ var getToolTest;
 
     return toolTest;
   };
-})();
+}());
 
+/* exported getCommonToolArguments */
 var getCommonToolArguments = function() {
   return [];
 };

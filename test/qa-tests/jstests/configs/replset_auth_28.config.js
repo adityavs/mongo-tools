@@ -1,3 +1,4 @@
+/* exported getToolTest */
 var getToolTest;
 
 var AUTH_USER = 'passwordIsTaco';
@@ -12,12 +13,12 @@ var AUTH_PASSWORD = 'Taco';
       nodes: 3,
       oplogSize: 5,
       auth: '',
-      keyFile: 'jstests/libs/key1'
+      keyFile: 'jstests/libs/key1',
     });
 
-    var nodes = replTest.startSet();
+    nodes = replTest.startSet();
     replTest.initiate();
-    var master = replTest.getMaster();
+    var master = replTest.getPrimary();
 
     toolTest.m = master;
     toolTest.db = master.getDB(name);
@@ -27,7 +28,7 @@ var AUTH_PASSWORD = 'Taco';
     db.getSiblingDB('admin').createUser({
       user: AUTH_USER,
       pwd: AUTH_PASSWORD,
-      roles: ['__system']
+      roles: ['__system'],
     });
 
     db.getSiblingDB('admin').auth(AUTH_USER, AUTH_PASSWORD);
@@ -45,8 +46,9 @@ var AUTH_PASSWORD = 'Taco';
 
     return toolTest;
   };
-})();
+}());
 
+/* exported getCommonToolArguments */
 var getCommonToolArguments = function() {
   return [
     '--username', AUTH_USER,
